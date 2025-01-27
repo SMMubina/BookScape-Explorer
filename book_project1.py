@@ -7,118 +7,13 @@ Original file is located at
     https://colab.research.google.com/github/SMMubina/BookScape-Explorer/blob/main/Book_Project1.ipynb
 """
 
-!pip install requests pandas
-
-import requests
-import pandas as pd
-from google.colab import files
-
-api_key = "AIzaSyCrRp6gjQ9UpcON_6GUgsNyAavX8RhmOco"   # API key
-
-def get_book_data(search_query, max_results=5000):
-    """
-    Fetches book data from the Google Books API.
-
-    Args:
-        search_query: The search term for books.
-        max_results: The maximum number of results to retrieve (default is 5000).
-
-    Returns:
-        A pandas DataFrame containing book information, or None if an error occurs.
-    """
-
-    base_url = "https://www.googleapis.com/books/v1/volumes"
-    params = {
-        "q": search_query,
-        "key": api_key,
-        "maxResults": 40
-    }
-
-    all_book_data = []
-    startIndex = 0
-    total_items = 0
-
-    try:
-        while startIndex < min(max_results, 5000) and (startIndex < total_items or total_items == 0):
-            params["startIndex"] = startIndex
-            response = requests.get(base_url, params=params)
-            response.raise_for_status()
-            data = response.json()
-
-            if 'items' not in data:
-                print("No items found in API response.")
-                break
-
-            items = data['items']
-            total_items = data.get("totalItems", 0)
-
-            for item in items:
-                volume_info = item.get('volumeInfo', {})
-                sale_info = item.get('saleInfo', {})
-
-                book_info = {
-                    'bookid': item.get('id', ''),
-                    'searchkey': search_query,
-                    'booktitle': volume_info.get('title', ''),
-                    'booksubtitle': volume_info.get('subtitle', ''),
-                    'bookauthors': ", ".join(volume_info.get('authors', [])),
-                    'bookdescription': volume_info.get('description', ''),
-                    'publisher': volume_info.get('publisher', ''),
-                    'industryIdentifiers': ", ".join([identifier.get('identifier', '') for identifier in volume_info.get('industryIdentifiers', [])]),
-                    'textreadingModes': volume_info.get('readingModes', {}).get('text', False),
-                    'imagereadingModes': volume_info.get('readingModes', {}).get('image', False),
-                    'pageCount': volume_info.get('pageCount', ''),
-                    'categories': ", ".join(volume_info.get('categories', [])),
-                    'language': volume_info.get('language', ''),
-                    'imageLinks': str(volume_info.get('imageLinks', {})),
-                    'ratingsCount': volume_info.get('ratingsCount', ''),
-                    'averageRating': volume_info.get('averageRating', ''),
-                    'country': sale_info.get('country', ''),
-                    'saleability': sale_info.get('saleability', ''),
-                    'isEbook': sale_info.get('isEbook', False),
-                    'amountlistPrice': sale_info.get('listPrice', {}).get('amount', ''),
-                    'currencyCode_listPrice': sale_info.get('listPrice', {}).get('currencyCode', ''),
-                    'amountretailPrice': sale_info.get('retailPrice', {}).get('amount', ''),
-                    'currencyCoderetailPrice': sale_info.get('retailPrice', {}).get('currencyCode', ''),
-                    'buyLink': sale_info.get('buyLink', ''),
-                    'year': volume_info.get('publishedDate', '').split('-')[0] if volume_info.get('publishedDate', '') else ''
-
-                }
-                all_book_data.append(book_info)
-
-
-            startIndex += 40
-
-        if not all_book_data:
-            print("No book data found for the search query.")
-            return None
-        return pd.DataFrame(all_book_data)
-
-    except requests.exceptions.RequestException as e:
-        print(f"Error fetching data: {e}")
-        return None
-
-
-
-search_term = "novel, History" #@param {type:"string"}
-df = get_book_data(search_term, max_results=5000)
-
-if df is not None:
-    print(df.head())
-    print(f"Total books found: {len(df)}")
-
-    file_name = f"books_{search_term.replace(' ', '_')}.csv"
-    df.to_csv(file_name, index=False)
-    files.download(file_name)
-
 !pip install streamlit
 !pip install mysql-connector-python
 !pip install pyngrok
 !npm install localtunnel
 !pip install ngrok
-!pip install requests pandas mysql-connector-python
-
-#%%writefile book1.py
+!pip install mysql
+!pip install requests pandas pymysql streamlit
 
 import requests
 import mysql.connector
@@ -131,203 +26,334 @@ import streamlit as st
 from PIL import Image
 from pyngrok import ngrok
 
+import requests
+import pymysql
+import pandas as pd
+import streamlit as st
+from mysql.connector import Error
+
+def set_light_background(color="#f9f9f9"):
+  st.markdown(
+      f"""
+      <style>
+      html, body, .stApp {{
+          background-color: {color}; /* Full-screen background color */
+          height: 100%; /* Cover the full height of the viewport */
+          margin: 0; /* Remove any margin or spacing */
+          padding: 0; /* Remove any padding */
+          top: 0; /* Ensure no space at the top */
+      }}
+      </style>
+      """,
+      unsafe_allow_html=True
+  )
 
 
-# Database connection details
-mydb = mysql.connector.connect(
-    host="gateway01.ap-southeast-1.prod.aws.tidbcloud.com",
-    port=4000,
-    user="3QChstWNTCtATP1.root",
-    password="4otgQ1SBiYWNdkuD",
-    database="project",  # Use the correct database name
-    autocommit=True
-)
 
-mycursor = mydb.cursor(buffered=True)
-
-def run_query(query):
-    try:
-        mycursor.execute(query)
-        results = mycursor.fetchall()
-        columns = [i[0] for i in mycursor.description]
-        df = pd.DataFrame(results, columns=columns)
-        return df
-    except mysql.connector.Error as err:
-        st.error(f"Error executing query: {err}")
-        return None
-
-st.title('BookScape Explorer :book:')
-
-# Search functionality
-keyword = st.text_input("Search for books by keyword:")
-
-# Question-specific queries
-question = st.selectbox("Select a question:", [
-    "1.Check Availability of eBooks vs Physical Books",    # 1
-    "2.Find the Publisher with the Most Books Published",   # 2
-    "3.Identify the Publisher with the Highest Average Rating",  #3
-    "4.Get the Top 5 Most Expensive Books by Retail Price",  #4
-    "5.Find Books Published After 2010 with at Least 500 Pages",  # 5
-    "6.List Books with Discounts Greater than 20%",  #6
-    "7.Find the Average Page Count for eBooks vs Physical Books", #7
-    "8.Find the Top 3 Authors with the Most Books",  # 8
-    "9.List Publishers with More than 10 Books", #9
-    "10.Find the Average Page Count for Each Category", #10
-    "11.Retrieve Books with More than 3 Authors",  #11
-    "12.Books with Ratings Count Greater Than the Average",  #12
-    "13.Books with the Same Author Published in the Same Year",  #13
-    "14.Books with a Specific Keyword in the Title", #14
-    "15.Year with the Highest Average Book Price", # 15
-    "16.Count Authors Who Published 3 Consecutive Years", #16
-    "17.Authors with books published in same year, different publishers", #17
-    "18.Average retail price of ebooks and physical books",
-    "19.Identify Books that are outliers",
-    "20.Publisher with the highest average rating (more than 10 books)"
-])
-
-if question:
-    if question == "1.Check Availability of eBooks vs Physical Books":   # 1 Question
-        query = "SELECT isEbook, COUNT(*) AS book_count FROM books GROUP BY isEbook;"
-        results_df = run_query(query)
-        st.write(results_df)
+def set_sidebar_color(bg_color="#90EE90", text_color="#000000"):
+    st.markdown(
+        f"""
+        <style>
+        [data-testid="stSidebar"] {{
+            background-color: {bg_color};
+            color: {text_color};
+        }}
+        [data-testid="stSidebar"] .css-1v3fvcr {{
+            color: {text_color};
+        }}
+        </style>
+        """,
+        unsafe_allow_html=True
+    )
 
 
-    elif question == "2.Find the Publisher with the Most Books Published":   # 2 Question
-        query = "SELECT publisher, COUNT(*) AS book_count FROM books GROUP BY publisher ORDER BY book_count DESC LIMIT 1;"
-        results_df = run_query(query)
-        st.write(results_df)
 
-    elif question == "3.Identify the Publisher with the Highest Average Rating":  # 3 Question
-        query = "SELECT publisher FROM books WHERE averageRating = (SELECT MAX(averageRating) FROM books);"
-        results_df = run_query(query)
-        if results_df is not None:
-            st.write(results_df)
+api_key = "AIzaSyCrRp6gjQ9UpcON_6GUgsNyAavX8RhmOco"   # API key
 
-    elif question == "4.Get the Top 5 Most Expensive Books by Retail Price":   # 4 Question
-        query = "SELECT booktitle, amountretailPrice FROM books ORDER BY amountretailPrice DESC LIMIT 5;"
-        results_df = run_query(query)
-        if results_df is not None:
-            st.write(results_df)
+# Google Books API Constants
+API_URL = "https://www.googleapis.com/books/v1/volumes"
+MAX_RESULTS = 40
+TOTAL_BOOKS = 1500
 
-    elif question == "5.Find Books Published After 2010 with at Least 500 Pages":   #5 question
-        query = "SELECT booktitle, year, pageCount FROM books WHERE year > 2010 AND pageCount >= 500;"
-        results_df = run_query(query)
-        if results_df is not None:
-            st.write(results_df)
 
-    elif question == "6.List Books with Discounts Greater than 20%":   # 6 Question
-        query = "SELECT booktitle, (amountlistPrice - amountretailPrice) / amountlistPrice AS discount_percentage FROM books WHERE (amountlistPrice - amountretailPrice) / amountlistPrice > 0.02;"
-        results_df = run_query(query)
-        if results_df is not None:
-            st.write(results_df)
+# TiDB Connection
+TIDB_HOST = 'gateway01.ap-southeast-1.prod.aws.tidbcloud.com'
+TIDB_PORT = 4000
+TIDB_USER = '3QChstWNTCtATP1.root'
+TIDB_PASSWORD = '4otgQ1SBiYWNdkuD'
+TIDB_DB = 'class'
 
-    elif question == "7.Find the Average Page Count for eBooks vs Physical Books":  #7 Question
-        query = "SELECT isEbook, AVG(pageCount) AS avg_page_count FROM books GROUP BY isEbook;"
-        results_df = run_query(query)
-        if results_df is not None:
-            st.write(results_df)
+# Function to fetch books from Google Books API
+def fetch_books_from_api(query):
+    all_books = []
+    start_index = 0
 
-    elif question == "8.Find the Top 3 Authors with the Most Books": #8 Question
-        query = "SELECT bookauthors, COUNT(*) AS book_count FROM books GROUP BY bookauthors ORDER BY book_count DESC LIMIT 3;"
-        results_df = run_query(query)
-        if results_df is not None:
-            st.write(results_df)
+    while len(all_books) < TOTAL_BOOKS:
+        params = {
+            'q': query,
+            'startIndex': start_index,
+            'maxResults': MAX_RESULTS
+        }
+        response = requests.get(API_URL, params=params)
+        data = response.json()
 
-    elif question == "9.List Publishers with More than 10 Books": #9 Question
-        query = "SELECT publisher, COUNT(*) AS book_count FROM books GROUP BY publisher HAVING book_count > 10;"
-        results_df = run_query(query)
-        if results_df is not None:
-            st.write(results_df)
-
-    elif question == "10.Find the Average Page Count for Each Category":  #10 Question
-        query = "SELECT categories, AVG(pageCount) AS avg_page_count FROM books GROUP BY categories;"
-        results_df = run_query(query)
-        if results_df is not None:
-            st.write(results_df)
-
-    elif question == "11.Retrieve Books with More than 3 Authors":  #11 Question
-        query = "SELECT booktitle, bookauthors FROM books WHERE LENGTH(bookauthors) - LENGTH(REPLACE(bookauthors, ',', '')) + 1 > 3;"
-        results_df = run_query(query)
-        if results_df is not None:
-            st.write(results_df)
-
-    elif question == "12.Books with Ratings Count Greater Than the Average":  #12 Question
-        query = "SELECT booktitle, ratingsCount FROM books WHERE ratingsCount > (SELECT AVG(ratingsCount) FROM books);"
-        results_df = run_query(query)
-        if results_df is not None:
-            st.write(results_df)
-
-    elif question == "13.Books with the Same Author Published in the Same Year": # 13 Question
-        query = "SELECT bookauthors, year, COUNT(*) AS book_count FROM books GROUP BY bookauthors, year HAVING book_count > 1;"
-        results_df = run_query(query)
-        if results_df is not None:
-            st.write(results_df)
-
-    elif question == "15.Year with the Highest Average Book Price": # 15 Question
-        query = "SELECT year, AVG(amountretailPrice) AS avg_price FROM books GROUP BY year ORDER BY avg_price DESC LIMIT 1;"
-        results_df = run_query(query)
-        if results_df is not None:
-            st.write(results_df)
-
-    elif question == "16.Count Authors Who Published 3 Consecutive Years": #16 Question
-        query = "SELECT bookauthors FROM books GROUP BY bookauthors HAVING COUNT(DISTINCT year) >= 3 AND MAX(year) - MIN(year) = COUNT(DISTINCT year) - 1;"
-        results_df = run_query(query)
-        if results_df is not None:
-            st.write(results_df)
-
-    elif question == "17.Authors with books published in same year, different publishers": #17 Question
-      query = """SELECT bookauthors, year, COUNT(*) AS book_count
-      FROM books
-      GROUP BY bookauthors, year
-      HAVING COUNT(DISTINCT publisher) > 1;"""
-      results_df = run_query(query)
-      if results_df is not None:
-        st.write(results_df)
-
-    elif question == "18.Average retail price of ebooks and physical books":  # 18 Question
-      query = """SELECT AVG(CASE WHEN isEbook = 1 THEN amountretailPrice ELSE NULL END) AS avg_ebook_price,
-        AVG(CASE WHEN isEbook = 0 THEN amountretailPrice ELSE NULL END) AS avg_physical_price
-        FROM books;"""
-      results_df = run_query(query)
-      if results_df is not None:
-        st.write(results_df)
-
-    elif question == "19.Identify Books that are outliers":  # 19 Question
-      query = """SELECT booktitle, averageRating, ratingsCount
-      FROM books
-      WHERE averageRating > (SELECT AVG(averageRating) + 2 * STDDEV(averageRating) FROM books);"""
-      results_df = run_query(query)
-      if results_df is not None:
-        st.write(results_df)
-
-    elif question == "20.Publisher with the highest average rating (more than 10 books)": # 20 Question
-        query = """SELECT publisher, AVG(averageRating) AS averageRating, COUNT(*) AS book_count
-        FROM books
-        GROUP BY publisher
-        HAVING COUNT(*) > 10
-        ORDER BY averageRating DESC
-        LIMIT 1;"""
-        results_df = run_query(query)
-        if results_df is not None:
-            st.write(results_df)
-
-    elif question == "14.Books with a Specific Keyword in the Title": # 14 Question
-        if keyword:
-            query = f"SELECT * FROM books WHERE booktitle LIKE '%{keyword}%';"
-            results_df = run_query(query)
-            if results_df is not None:
-                st.write(results_df)
+        if 'items' in data:
+            all_books.extend(data['items'])
+            start_index += MAX_RESULTS
         else:
-            st.write("Please enter a keyword in the search box.")
+            break
+
+    return all_books[:TOTAL_BOOKS]
+
+# Create the schema in TiDB
+def create_db_schema():
+    conn = pymysql.connect(
+        host=TIDB_HOST,
+        port=TIDB_PORT,
+        user=TIDB_USER,
+        password=TIDB_PASSWORD,
+        db=TIDB_DB,
+        ssl={'ssl_ca': '/content/cert/ca.pem'}
+    )
+    cursor = conn.cursor()
+
+    cursor.execute("DROP TABLE IF EXISTS books;")
+
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS books (
+        bookid INT PRIMARY KEY AUTO_INCREMENT,
+        searchkey TEXT,
+        booktitle TEXT,
+        booksubtitle TEXT,
+        bookauthors TEXT,
+        bookdescription TEXT,
+        publisher TEXT,
+        industryIdentifiers TEXT,
+        textreadingModes TEXT,
+        imagereadingModes TEXT,
+        pageCount INT,
+        categories TEXT,
+        language VARCHAR(255),
+        imageLinks TEXT,
+        ratingsCount INT,
+        averageRating DECIMAL(3,2),
+        country VARCHAR(50),
+        saleability TEXT,
+        isEbook BOOLEAN,
+        amountlistPrice DECIMAL(10,2),
+        currencyCode_listPrice VARCHAR(255),
+        amountretailPrice DECIMAL(10,2),
+        currencyCoderetailPrice VARCHAR(255),
+        buyLink TEXT,
+        year INT
+    );
+    """)
+    conn.commit()
+    cursor.close()
+    conn.close()
+
+# Store book data into TiDB
+def store_books_in_tidb(books, query):
+    conn = pymysql.connect(
+        host=TIDB_HOST,
+        port=TIDB_PORT,
+        user=TIDB_USER,
+        password=TIDB_PASSWORD,
+        db=TIDB_DB,
+        ssl={'ssl_ca': '/content/cert/ca.pem'}
+    )
+    cursor = conn.cursor()
+    for item in books:
+        volume_info = item.get('volumeInfo', {})
+        sale_info = item.get('saleInfo', {})
+
+        volume_info = item['volumeInfo']
+        title = volume_info.get('title', 'N/A')
+        subtitle = volume_info.get('subtitle', 'N/A')
+        bookauthors = ', '.join(volume_info.get('authors', ['N/A']))
+        description = volume_info.get('description', 'N/A')
+        publisher = volume_info.get('publisher', 'N/A')
+        industry_identifiers = ', '.join(str(x) for x in volume_info.get('industryIdentifiers', []))
+        text_reading_modes = volume_info.get('readingModes', {}).get('text', 'N/A')
+        image_reading_modes = volume_info.get('readingModes', {}).get('image', 'N/A')
+        page_count = volume_info.get('pageCount', 0)
+        categories = ', '.join(volume_info.get('categories', ['N/A']))
+        language = volume_info.get('language', 'en')
+        image_links = ', '.join(volume_info.get('imageLinks', {}).values())
+        ratings_count = volume_info.get('ratingsCount', 0)
+        average_rating = volume_info.get('averageRating', 0)
+        country = sale_info.get('country', 'US')
+        saleability = sale_info.get('saleability', False)
+        is_ebook = sale_info.get('isEbook', False)
+        list_price = sale_info.get('listPrice', {}).get('amount', 0)
+        currency_code_list_price = sale_info.get('listPrice', {}).get('currencyCode', 'USD')
+        retail_price = sale_info.get('retailPrice', {}).get('amount', 0)
+        currency_code_retail_price = sale_info.get('retailPrice', {}).get('currencyCode', 'USD')
+        buy_link = sale_info.get('buyLink', 'N/A')
+        published_date = volume_info.get('publishedDate', '0000')
+        try:
+            year = int(''.join(filter(str.isdigit, published_date[:4])))
+        except ValueError:
+            year = 0
+
+        cursor.execute("""
+            INSERT INTO books (searchkey, booktitle, booksubtitle, bookauthors, bookdescription, publisher,
+            industryIdentifiers, textreadingModes, imagereadingModes, pageCount, categories, language, imageLinks,
+            ratingsCount, averageRating, country, saleability, isEbook, amountlistPrice, currencyCode_listPrice,
+            amountretailPrice, currencyCoderetailPrice, buyLink, year)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        """, (query, title, subtitle, bookauthors, description, publisher, industry_identifiers, text_reading_modes,
+              image_reading_modes, page_count, categories, language, image_links, ratings_count, average_rating,
+              country, saleability, is_ebook, list_price, currency_code_list_price, retail_price,
+              currency_code_retail_price, buy_link, year))
+    conn.commit()
+    cursor.close()
+    conn.close()
+
+# Sidebar navigation
+st.sidebar.markdown("<h1 style='font-size: 30px;'>Menu</h1>", unsafe_allow_html=True)
+menu = st.sidebar.radio("**Select an option**", ["**📚 Book Scraping Application**", "**🧠 Analysis Book**"])
+
+if menu == "**📚 Book Scraping Application**":
+  set_light_background("#ADD8E6")  #light blue
+  set_sidebar_color(bg_color="#FFFFE0", text_color="#000000")  #very light yellow
+
+# Streamlit App
+  st.title('**📚 Book Scraping Application**')
+  keyword = st.text_input("**Enter a keyword:**")
+  if st.button("🔍 Search"):
+      if keyword:
+          with st.spinner("Fetching data..."):
+              books = fetch_books_from_api(keyword)
+          if books:
+            with st.spinner("Fetching data..."):
+              create_db_schema()
+              store_books_in_tidb(books, keyword)
+              st.success(f"✅ Found {len(books)} books for keyword: {keyword}")
+          else:
+              st.error("No data found for the given query.")
+      else:
+          st.error("Please enter a search term.")
+
+elif menu == "**🧠 Analysis Book**":
+
+  # Apply the background
+  set_light_background("#ffe6e6")  #light pink color
+
+  # TiDB Connection
+  TIDB_HOST = 'gateway01.ap-southeast-1.prod.aws.tidbcloud.com'
+  TIDB_PORT = 4000
+  TIDB_USER = '3QChstWNTCtATP1.root'
+  TIDB_PASSWORD = '4otgQ1SBiYWNdkuD'
+  TIDB_DB = 'class'
+
+  # SQL Queries
+  queries = {
+      "1. Check Availability of eBooks vs Physical Books":
+          "SELECT CASE WHEN isEbook = 1 THEN 'eBooks' ELSE 'Physical Books' END AS Book_Type, COUNT(*) AS book_count FROM books GROUP BY isEbook;",
+      "2. Find the Publisher with the Most Books Published":
+          "SELECT publisher, COUNT(*) AS book_count FROM books WHERE publisher != 'N/A' GROUP BY publisher ORDER BY book_count DESC LIMIT 1;",
+      "3. Identify the Publisher with the Highest Average Rating":
+          "SELECT publisher, AVG(averageRating) AS avg_rating FROM books GROUP BY publisher ORDER BY avg_rating DESC LIMIT 1;",
+      "4. Get the Top 5 Most Expensive Books by Retail Price":
+          "SELECT booktitle, amountretailPrice FROM books ORDER BY amountretailPrice DESC LIMIT 5;",
+      "5. Find Books Published After 2010 with at Least 500 Pages":
+          "SELECT booktitle, pageCount, year FROM books WHERE year > 2010 AND pageCount >= 500;",
+      "6. List Books with Discounts Greater than 20%":
+          """SELECT booktitle, (amountlistPrice - amountretailPrice) / amountlistPrice AS discount_percentage
+            FROM books WHERE
+            (amountlistPrice - amountretailPrice) / amountlistPrice > 0.02;""",
+      "7. Find the Average Page Count for eBooks vs Physical Books":
+          "SELECT CASE WHEN isEbook = 1 THEN 'eBooks' ELSE 'Physical Books' END AS Book_Type, AVG(pageCount) AS avg_page_count FROM books GROUP BY isEbook;",
+      "8. Find the Top 3 Authors with the Most Books":
+          "SELECT bookauthors, COUNT(*) AS book_count FROM books WHERE bookauthors != 'N/A' GROUP BY bookauthors ORDER BY book_count DESC LIMIT 3;",
+      "9. List Publishers with More than 10 Books":
+          "SELECT publisher, COUNT(*) AS book_count FROM books WHERE publisher != 'N/A' GROUP BY publisher HAVING book_count > 10;",
+      "10. Find the Average Page Count for Each Category":
+          "SELECT categories, AVG(pageCount) AS avg_page_count FROM books WHERE categories != 'N/A' GROUP BY categories;",
+      "11. Retrieve Books with More than 3 Authors":
+          """SELECT booktitle, bookauthors FROM books
+            WHERE LENGTH(bookauthors) - LENGTH(REPLACE(bookauthors, ',', '')) >= 3;""",
+      "12. Books with Ratings Count Greater Than the Average":
+          """SELECT booktitle, ratingsCount FROM books
+            WHERE ratingsCount > (SELECT AVG(ratingsCount) FROM books);""",
+      "13. Books with the Same Author Published in the Same Year":
+          """SELECT bookauthors, year, COUNT(*) AS book_count FROM books WHERE bookauthors != 'N/A'
+            GROUP BY bookauthors, year HAVING book_count > 1;""",
+      "14. Books with a Specific Keyword in the Title": "", # Placeholder for dynamic query
+
+      "15. Year with the Highest Average Book Price":
+          """SELECT year, AVG(amountretailPrice) AS avg_price FROM books
+            GROUP BY year ORDER BY avg_price DESC LIMIT 1;""",
+      "16. Count Authors Who Published 3 Consecutive Years":
+          """SELECT bookauthors, COUNT(DISTINCT year) AS consecutive_years FROM books WHERE bookauthors != 'N/A'
+            GROUP BY bookauthors HAVING consecutive_years >= 3;""",
+      "17. Authors with Books Published in the Same Year by Different Publishers":
+          """SELECT bookauthors, year, COUNT(DISTINCT publisher) AS publisher_count FROM books  WHERE bookauthors != 'N/A'
+            GROUP BY bookauthors, year HAVING publisher_count > 1;""",
+      "18. Average Retail Price of eBooks and Physical Books":
+          "SELECT AVG(CASE WHEN isEbook = 1 THEN amountretailPrice ELSE NULL END) AS avg_ebook_price, AVG(CASE WHEN isEbook = 0 THEN amountretailPrice ELSE NULL END) AS avg_physical_price FROM books;",
+      "19. Identify Books That Are Outliers":
+          """SELECT booktitle, amountretailPrice FROM books
+            WHERE amountretailPrice > (SELECT AVG(amountretailPrice) + 3 * STDDEV(amountretailPrice) FROM books)
+            OR amountretailPrice < (SELECT AVG(amountretailPrice) - 3 * STDDEV(amountretailPrice) FROM books);""",
+      "20. Publisher with the Highest Average Rating (More than 10 Books)":
+          """SELECT publisher, AVG(averageRating) AS avg_rating FROM books
+            GROUP BY publisher HAVING COUNT(*) > 10 ORDER BY avg_rating DESC LIMIT 1;"""
+  }
+
+
+  # Streamlit App
+  st.title('**🧠 Analysis Book**')
+
+  # User selection
+  selected_question = st.selectbox("**Select a question:**", list(queries.keys()))
+
+  if selected_question == "14. Books with a Specific Keyword in the Title":
+      keyword = st.text_input("Enter the keyword to search in book titles 🔤 :")
+
+  if st.button("🚀Run Query"):
+    with st.spinner("Fetching data..."):
+      query = queries[selected_question]
+
+      if selected_question == "14. Books with a Specific Keyword in the Title" and keyword:
+          query = f"SELECT * FROM books WHERE booktitle LIKE '%{keyword}%'"
+      else:
+          query = queries.get(selected_question, "")
+
+      try:
+          conn = pymysql.connect(
+              host=TIDB_HOST,
+              port=TIDB_PORT,
+              user=TIDB_USER,
+              password=TIDB_PASSWORD,
+              db=TIDB_DB,
+              ssl={'ssl_ca': '/content/cert/ca.pem'}
+          )
+          # Execute the query
+          data = pd.read_sql(query, conn)
+          conn.close()
+
+          if not data.empty:
+              st.write(f"Results for: {selected_question}")
+              st.dataframe(data)
+          else:
+              st.warning("No results found!")
+      except Exception as e:
+          st.error(f"Error running query: {e}")
+
+
+  # Apply the background styling
+  set_light_background("#ffe6e6")  #light pink color
+  set_sidebar_color(bg_color="#FFCCCB", text_color="#000000") #light pink (also known as "misty rose")
 
 # Set your ngrok auth token
 from pyngrok import ngrok
 ngrok.set_auth_token("2qYh3WXfLyTfZiBiskvg0VXMXds_4bHusVSb8aaK2WHaf6HKz")
-
 
 # Start ngrok tunnel
 public_url = ngrok.connect(8501)
 print(f"Streamlit app is live at: {public_url}")
 
 # Run the Streamlit app
-!streamlit run book.py &>/dev/null&
+!streamlit run Explorer.py &>/dev/null&
